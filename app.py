@@ -82,6 +82,31 @@ def handle_mediaq(query):
     except Exception:
         return None
 
+def handle_agent(task):
+    try:
+        import time as _t
+        r = requests.post(f'{ORACLE_MEDIA}/agent-task', params={'key': MEDIA_KEY},
+                          json={'task': task}, timeout=60).json()
+        tid = r.get('id', '')
+        for _ in range(36):
+            _t.sleep(20)
+            s = requests.get(f'{ORACLE_MEDIA}/agent-result', params={'key': MEDIA_KEY, 'id': tid}, timeout=60).json()
+            if s.get('status') == 'done':
+                if s.get('files'):
+                    f = requests.get(f'{ORACLE_MEDIA}/agent-file', params={'key': MEDIA_KEY, 'p': s['files'][0]}, timeout=300)
+                    if len(f.content) > 10000:
+                        return upload_reply_audio(f.content)
+                    return None
+                return None
+            if s.get('status') == 'error':
+                return None
+    except Exception:
+        pass
+    return None
+
+def handle_agent_async(task):
+    threading.Thread(target=handle_agent, args=(task,), daemon=True).start()
+
 def handle_mediaq_async(query):
     threading.Thread(target=handle_mediaq, args=(query,), daemon=True).start()
 
@@ -112,8 +137,10 @@ def hook():
     try:
         dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': rec}, timeout=30)
         text, audio = brain_voice(dl.content)
-        if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:')):
-            if text.startswith('MEDIAQ:'):
+        if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:') or text.startswith('AGENT:')):
+            if text.startswith('AGENT:'):
+                name = handle_agent(text[6:].strip())
+            elif text.startswith('MEDIAQ:'):
                 name = handle_mediaq(text[7:].strip())
             else:
                 name = handle_media(text[6:].strip())
@@ -157,8 +184,11 @@ def poll_once():
             dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': what}, timeout=30)
             text, audio = brain_voice(dl.content, what.split('/')[-1])
             status['processed'].append(what)
-            if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:')):
-                if text.startswith('MEDIAQ:'):
+            if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:') or text.startswith('AGENT:')):
+                if text.startswith('AGENT:'):
+                    handle_agent_async(text[6:].strip())
+                    status['note'] = 'browser-agent task started in background'
+                elif text.startswith('MEDIAQ:'):
                     handle_mediaq_async(text[7:].strip())
                     status['note'] = 'media download started in background'
                 else:
