@@ -60,8 +60,8 @@ def yemot_upload_tts(text, dest):
     return r.text[:200]
 
 def handle_media(url):
-    dl = requests.get(url, timeout=120)
-    if len(dl.content) > 20_000_000:
+    dl = requests.get(url, timeout=300)
+    if len(dl.content) > 150_000_000:
         return None
     return upload_reply_audio(dl.content)
 
