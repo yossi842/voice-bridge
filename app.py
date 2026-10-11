@@ -58,7 +58,11 @@ def poll_once():
                 seen.clear()
             dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': what}, timeout=30)
             text, audio = brain_voice(dl.content, what.split('/')[-1])
-            if text:
+            if audio:
+                requests.post(f'{YBASE}/UploadFile',
+                    params={'token': YEMOT_TOKEN, 'path': f'ivr2:/{EXT}/Ans.wav', 'convertAudio': 1},
+                    files={'file': ('ans.mp3', audio, 'audio/mpeg')}, timeout=60)
+            elif text:
                 dest = f"ivr2:/{EXT}/Reply-{int(time.time())}.tts"
                 yemot_upload_tts(text[:1000], dest)
     except Exception:
