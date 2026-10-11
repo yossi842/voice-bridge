@@ -19,8 +19,29 @@ def brain_voice(wav_bytes, fname='rec.wav'):
     except Exception:
         return 'שגיאה בעיבוד', None
 
+def next_num_name():
+    try:
+        r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': EXT}, timeout=30).json()
+        nums = []
+        for f in r.get('files', []):
+            n = (f.get('name') or '')
+            if n.endswith('.wav') and n[:-4].isdigit():
+                nums.append(int(n[:-4]))
+        return f'{max(nums) + 1:03d}.wav' if nums else '001.wav'
+    except Exception:
+        return f'Reply-{int(time.time())}.wav'
+
+def upload_reply_audio(audio):
+    name = next_num_name()
+    requests.post(f'{YBASE}/UploadFile',
+        params={'token': YEMOT_TOKEN, 'path': f'ivr2:/{EXT}/{name}', 'convertAudio': 1},
+        files={'file': ('ans.mp3', audio, 'audio/mpeg')}, timeout=60)
+    seen.add(f'ivr2:/{EXT}/{name}')
+    return name
+
 def yemot_upload_tts(text, dest):
     r = requests.post(f'{YBASE}/UploadTextFile', data={'token': YEMOT_TOKEN, 'what': dest, 'contents': text}, timeout=30)
+    seen.add(dest)
     return r.text[:200]
 
 @app.route('/health')
@@ -37,10 +58,8 @@ def hook():
         dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': rec}, timeout=30)
         text, audio = brain_voice(dl.content)
         if audio:
-            up = requests.post(f'{YBASE}/UploadFile',
-                params={'token': YEMOT_TOKEN, 'path': f'ivr2:/{EXT}/Ans.wav', 'convertAudio': 1},
-                files={'file': ('ans.mp3', audio, 'audio/mpeg')}, timeout=60)
-            return Response(f'playfile={EXT}/Ans', mimetype='text/plain')
+            name = upload_reply_audio(audio)
+            return Response(f'playfile={EXT}/{name[:-4]}', mimetype='text/plain')
         safe = (text or '')[:900].replace('\n', ' ')
         return Response(f'read=t-{safe}', mimetype='text/plain')
     except Exception as e:
@@ -51,7 +70,10 @@ def poll_once():
         r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': EXT}, timeout=30).json()
         for f in r.get('files', []):
             what = f.get('what', '')
-            if what in seen or not what.endswith('.wav') or '/Ans' in what or 'Reply' in what:
+            if what in seen or not what.endswith('.wav'):
+                continue
+            if f.get('source') != 'Record':
+                seen.add(what)
                 continue
             seen.add(what)
             if len(seen) > 200:
@@ -59,9 +81,7 @@ def poll_once():
             dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': what}, timeout=30)
             text, audio = brain_voice(dl.content, what.split('/')[-1])
             if audio:
-                requests.post(f'{YBASE}/UploadFile',
-                    params={'token': YEMOT_TOKEN, 'path': f'ivr2:/{EXT}/Ans.wav', 'convertAudio': 1},
-                    files={'file': ('ans.mp3', audio, 'audio/mpeg')}, timeout=60)
+                upload_reply_audio(audio)
             elif text:
                 dest = f"ivr2:/{EXT}/Reply-{int(time.time())}.tts"
                 yemot_upload_tts(text[:1000], dest)
