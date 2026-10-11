@@ -97,6 +97,16 @@ def handle_agent(task):
                     if len(f.content) > 10000:
                         return upload_reply_audio(f.content)
                     return None
+                import re as _re
+                m = _re.search(r'https?://\S+', s.get('result') or '')
+                if m:
+                    u = m.group(0).rstrip(').,')
+                    try:
+                        d = requests.get(f'{ORACLE_MEDIA}/media', params={'key': MEDIA_KEY, 'url': u}, timeout=600)
+                        if d.ok and len(d.content) > 10000:
+                            return upload_reply_audio(d.content)
+                    except Exception:
+                        pass
                 return None
             if s.get('status') == 'error':
                 return None
