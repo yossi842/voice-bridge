@@ -8,6 +8,7 @@ BRAIN_URL = os.environ.get('BRAIN_URL', 'https://voice-brain-o2ym.onrender.com')
 EXT = os.environ.get('YEMOT_EXT', '1')
 YBASE = 'https://www.call2all.co.il/ym/api'
 seen = set()
+first_run = True
 status = {'last_poll': 'never', 'last_error': '', 'processed': []}
 
 def brain_voice(wav_bytes, fname='rec.wav'):
@@ -81,12 +82,20 @@ def hook():
         return Response(f'read=t-שגיאה: {str(e)[:100]}', mimetype='text/plain')
 
 def poll_once():
+    global first_run
     status['last_poll'] = time.strftime('%H:%M:%S')
     try:
         r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': EXT}, timeout=30).json()
         status['dir_status'] = str(r.get('responseStatus', ''))[:50]
         status['files_count'] = len(r.get('files', []))
         status['ext'] = EXT
+        if first_run:
+            for f in r.get('files', []):
+                if (f.get('what') or '').endswith('.wav'):
+                    seen.add(f['what'])
+            first_run = False
+            status['note'] = 'baseline marked'
+            return
         for f in r.get('files', []):
             what = f.get('what', '')
             if what in seen or not what.endswith('.wav'):
