@@ -8,6 +8,7 @@ BRAIN_URL = os.environ.get('BRAIN_URL', 'https://voice-brain-o2ym.onrender.com')
 EXT = os.environ.get('YEMOT_EXT', '1')
 YBASE = 'https://www.call2all.co.il/ym/api'
 seen = set()
+status = {'last_poll': 'never', 'last_error': '', 'processed': []}
 
 def brain_voice(wav_bytes, fname='rec.wav'):
     r = requests.post(f'{BRAIN_URL}/voice', files={'audio': (fname, wav_bytes, 'audio/wav')}, timeout=120)
@@ -48,6 +49,11 @@ def yemot_upload_tts(text, dest):
 def health():
     return 'ok'
 
+@app.route('/debug')
+def debug():
+    import json as _j
+    return Response(_j.dumps(status, ensure_ascii=False), mimetype='application/json')
+
 @app.route('/hook')
 def hook():
     rec = request.args.get('rec', '')
@@ -66,6 +72,7 @@ def hook():
         return Response(f'read=t-שגיאה: {str(e)[:100]}', mimetype='text/plain')
 
 def poll_once():
+    status['last_poll'] = time.strftime('%H:%M:%S')
     try:
         r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': EXT}, timeout=30).json()
         for f in r.get('files', []):
@@ -80,13 +87,14 @@ def poll_once():
                 seen.clear()
             dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': what}, timeout=30)
             text, audio = brain_voice(dl.content, what.split('/')[-1])
+            status['processed'].append(what)
             if audio:
                 upload_reply_audio(audio)
             elif text:
                 dest = f"ivr2:/{EXT}/Reply-{int(time.time())}.tts"
                 yemot_upload_tts(text[:1000], dest)
-    except Exception:
-        pass
+    except Exception as e:
+        status['last_error'] = str(e)[:300]
 
 def loop():
     while True:
