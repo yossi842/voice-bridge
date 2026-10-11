@@ -73,7 +73,14 @@ def handle_mediaq(query):
             return upload_reply_audio(r.content)
     except Exception:
         pass
-    return None
+    try:
+        from gtts import gTTS
+        import io as _io
+        buf = _io.BytesIO()
+        gTTS('לא מצאתי את המבוקש. אמור בבקשה את השם לאט ובצורה ברורה.', lang='iw').write_to_fp(buf)
+        return upload_reply_audio(buf.getvalue())
+    except Exception:
+        return None
 
 def handle_mediaq_async(query):
     threading.Thread(target=handle_mediaq, args=(query,), daemon=True).start()
