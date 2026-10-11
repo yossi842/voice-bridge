@@ -55,6 +55,19 @@ def handle_media(url):
         return None
     return upload_reply_audio(dl.content)
 
+def handle_mediaq(query):
+    try:
+        from urllib.parse import quote_plus
+        r = requests.get(f'{ORACLE_MEDIA}/media', params={'key': MEDIA_KEY, 'q': query}, timeout=300)
+        if r.ok and len(r.content) > 10000:
+            return upload_reply_audio(r.content)
+    except Exception:
+        pass
+    return None
+
+ORACLE_MEDIA = os.environ.get('ORACLE_BROWSE_URL', 'http://129.159.159.222:8080')
+MEDIA_KEY = os.environ.get('BROWSE_KEY', 'tzvi-free-1234')
+
 @app.route('/health')
 def health():
     return 'ok'
@@ -79,11 +92,14 @@ def hook():
     try:
         dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': rec}, timeout=30)
         text, audio = brain_voice(dl.content)
-        if text and text.startswith('MEDIA:'):
-            name = handle_media(text[6:].strip())
+        if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:')):
+            if text.startswith('MEDIAQ:'):
+                name = handle_mediaq(text[7:].strip())
+            else:
+                name = handle_media(text[6:].strip())
             if name:
                 return Response(f'playfile={EXT}/{name[:-4]}', mimetype='text/plain')
-            return Response('read=t-לא הצלחתי להוריד את השיר', mimetype='text/plain')
+            return Response('read=t-לא הצלחתי להוריד את השמע', mimetype='text/plain')
         if audio:
             name = upload_reply_audio(audio)
             return Response(f'playfile={EXT}/{name[:-4]}', mimetype='text/plain')
@@ -120,8 +136,11 @@ def poll_once():
             dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': what}, timeout=30)
             text, audio = brain_voice(dl.content, what.split('/')[-1])
             status['processed'].append(what)
-            if text and text.startswith('MEDIA:'):
-                handle_media(text[6:].strip())
+            if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:')):
+                if text.startswith('MEDIAQ:'):
+                    handle_mediaq(text[7:].strip())
+                else:
+                    handle_media(text[6:].strip())
             elif audio:
                 upload_reply_audio(audio)
             elif text:
