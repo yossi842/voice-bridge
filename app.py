@@ -9,7 +9,17 @@ EXT = os.environ.get('YEMOT_EXT', '1')
 YBASE = 'https://www.call2all.co.il/ym/api'
 seen = set()
 first_run = True
+import time as _t
+START_TS = _t.time()
 status = {'last_poll': 'never', 'last_error': '', 'processed': []}
+
+def _file_ts(ds):
+    try:
+        import datetime as _d
+        dt = _d.datetime.strptime(ds, '%d/%m/%Y %H:%M')
+        return dt.timestamp() - 3 * 3600  # wall clock is Israel time (UTC+3)
+    except Exception:
+        return 0
 
 def brain_voice(wav_bytes, fname='rec.wav'):
     r = requests.post(f'{BRAIN_URL}/voice', files={'audio': (fname, wav_bytes, 'audio/wav')}, timeout=120)
@@ -118,10 +128,11 @@ def poll_once():
         status['ext'] = EXT
         if first_run:
             for f in r.get('files', []):
-                if (f.get('what') or '').endswith('.wav'):
-                    seen.add(f['what'])
+                what = f.get('what') or ''
+                if what.endswith('.wav') and _file_ts(f.get('date') or '') < START_TS - 120:
+                    seen.add(what)
             first_run = False
-            status['note'] = 'baseline marked'
+            status['note'] = 'baseline marked (old only)'
             return
         for f in r.get('files', []):
             what = f.get('what', '')
