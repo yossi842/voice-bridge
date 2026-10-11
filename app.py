@@ -54,6 +54,12 @@ def debug():
     import json as _j
     return Response(_j.dumps(status, ensure_ascii=False), mimetype='application/json')
 
+@app.route('/poll-now')
+def poll_now():
+    poll_once()
+    import json as _j
+    return Response(_j.dumps(status, ensure_ascii=False), mimetype='application/json')
+
 @app.route('/hook')
 def hook():
     rec = request.args.get('rec', '')
