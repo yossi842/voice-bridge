@@ -49,6 +49,12 @@ def yemot_upload_tts(text, dest):
     seen.add(dest)
     return r.text[:200]
 
+def handle_media(url):
+    dl = requests.get(url, timeout=120)
+    if len(dl.content) > 20_000_000:
+        return None
+    return upload_reply_audio(dl.content)
+
 @app.route('/health')
 def health():
     return 'ok'
@@ -73,6 +79,11 @@ def hook():
     try:
         dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': rec}, timeout=30)
         text, audio = brain_voice(dl.content)
+        if text and text.startswith('MEDIA:'):
+            name = handle_media(text[6:].strip())
+            if name:
+                return Response(f'playfile={EXT}/{name[:-4]}', mimetype='text/plain')
+            return Response('read=t-לא הצלחתי להוריד את השיר', mimetype='text/plain')
         if audio:
             name = upload_reply_audio(audio)
             return Response(f'playfile={EXT}/{name[:-4]}', mimetype='text/plain')
@@ -109,7 +120,9 @@ def poll_once():
             dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': what}, timeout=30)
             text, audio = brain_voice(dl.content, what.split('/')[-1])
             status['processed'].append(what)
-            if audio:
+            if text and text.startswith('MEDIA:'):
+                handle_media(text[6:].strip())
+            elif audio:
                 upload_reply_audio(audio)
             elif text:
                 dest = f"ivr2:/{EXT}/Reply-{int(time.time())}.tts"
