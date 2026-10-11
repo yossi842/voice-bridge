@@ -23,6 +23,9 @@ def brain_voice(wav_bytes, fname='rec.wav'):
 def next_num_name():
     try:
         r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': EXT}, timeout=30).json()
+        status['dir_status'] = str(r.get('responseStatus', ''))[:50]
+        status['files_count'] = len(r.get('files', []))
+        status['ext'] = EXT
         nums = []
         for f in r.get('files', []):
             n = (f.get('name') or '')
@@ -81,6 +84,9 @@ def poll_once():
     status['last_poll'] = time.strftime('%H:%M:%S')
     try:
         r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': EXT}, timeout=30).json()
+        status['dir_status'] = str(r.get('responseStatus', ''))[:50]
+        status['files_count'] = len(r.get('files', []))
+        status['ext'] = EXT
         for f in r.get('files', []):
             what = f.get('what', '')
             if what in seen or not what.endswith('.wav'):
