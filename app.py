@@ -68,12 +68,15 @@ def handle_media(url):
 def handle_mediaq(query):
     try:
         from urllib.parse import quote_plus
-        r = requests.get(f'{ORACLE_MEDIA}/media', params={'key': MEDIA_KEY, 'q': query}, timeout=300)
+        r = requests.get(f'{ORACLE_MEDIA}/media', params={'key': MEDIA_KEY, 'q': query}, timeout=600)
         if r.ok and len(r.content) > 10000:
             return upload_reply_audio(r.content)
     except Exception:
         pass
     return None
+
+def handle_mediaq_async(query):
+    threading.Thread(target=handle_mediaq, args=(query,), daemon=True).start()
 
 ORACLE_MEDIA = os.environ.get('ORACLE_BROWSE_URL', 'http://129.159.159.222:8080')
 MEDIA_KEY = os.environ.get('BROWSE_KEY', 'tzvi-free-1234')
@@ -129,7 +132,7 @@ def poll_once():
         if first_run:
             for f in r.get('files', []):
                 what = f.get('what') or ''
-                if what.endswith('.wav') and _file_ts(f.get('date') or '') < START_TS - 120:
+                if what.endswith('.wav') and _file_ts(f.get('date') or '') < START_TS - 600:
                     seen.add(what)
             first_run = False
             status['note'] = 'baseline marked (old only)'
@@ -149,7 +152,8 @@ def poll_once():
             status['processed'].append(what)
             if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:')):
                 if text.startswith('MEDIAQ:'):
-                    handle_mediaq(text[7:].strip())
+                    handle_mediaq_async(text[7:].strip())
+                    status['note'] = 'media download started in background'
                 else:
                     handle_media(text[6:].strip())
             elif audio:
