@@ -139,6 +139,31 @@ def debug():
 
 @app.route('/poll-now')
 def poll_now():
+    only = request.args.get('file', '')
+    if only:
+        try:
+            seen.discard(only)
+            dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': only}, timeout=30)
+            text, audio = brain_voice(dl.content, only.split('/')[-1])
+            status['processed'].append(only)
+            if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:') or text.startswith('AGENT:')):
+                if text.startswith('AGENT:'):
+                    handle_agent_async(text[6:].strip())
+                    status['note'] = 'browser-agent task started in background'
+                elif text.startswith('MEDIAQ:'):
+                    handle_mediaq_async(text[7:].strip())
+                    status['note'] = 'media download started in background'
+                else:
+                    handle_media(text[6:].strip())
+            elif audio:
+                upload_reply_audio(audio)
+            elif text:
+                dest = f"ivr2:/{EXT}/Reply-{int(time.time())}.tts"
+                yemot_upload_tts(text[:1000], dest)
+        except Exception as e:
+            status['last_error'] = str(e)[:300]
+        import json as _j
+        return Response(_j.dumps(status, ensure_ascii=False), mimetype='application/json')
     poll_once()
     import json as _j
     return Response(_j.dumps(status, ensure_ascii=False), mimetype='application/json')
