@@ -157,54 +157,41 @@ def debug():
     return Response(_j.dumps(status, ensure_ascii=False), mimetype='application/json')
 
 _POLL_LOCK = threading.Lock()
+_POLL_WANTED = threading.Event()
 
 @app.route('/poll-now')
 def poll_now():
-    # serialise: cron keepalive, manual trigger and the 30s loop must never
-    # process the same recording twice. acquired with a timeout so a stuck
-    # poll can never freeze the loop permanently.
-    if not _POLL_LOCK.acquire(blocking=False):
-        return Response(json.dumps(status, ensure_ascii=False), mimetype='application/json')
-    try:
-        return _poll_now_inner()
-    finally:
-        try:
-            _POLL_LOCK.release()
-        except Exception:
-            pass
-
-def _poll_now_inner():
+    # MUST return immediately. Heavy work (STT+LLM+TTS) can exceed gunicorn's
+    # --timeout, which kills the worker and takes the polling thread with it.
     only = request.args.get('file', '')
     if only:
-        try:
-            # force-reprocess a specific recording exactly once: mark it seen
-            # BEFORE work so a concurrent poll can't answer it a second time.
-            seen.add(only)
-            save_seen()
-            dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': only}, timeout=30)
-            text, audio = brain_voice(dl.content, only.split('/')[-1])
-            status['processed'].append(only)
-            if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:') or text.startswith('AGENT:')):
-                if text.startswith('AGENT:'):
-                    handle_agent_async(text[6:].strip())
-                    status['note'] = 'browser-agent task started in background'
-                elif text.startswith('MEDIAQ:'):
-                    handle_mediaq_async(text[7:].strip())
-                    status['note'] = 'media download started in background'
-                else:
-                    handle_media(text[6:].strip())
-            elif audio:
-                upload_reply_audio(audio)
-            elif text:
-                dest = f"ivr2:/{EXT}/Reply-{int(time.time())}.tts"
-                yemot_upload_tts(text[:1000], dest)
-        except Exception as e:
-            status['last_error'] = str(e)[:300]
-        import json as _j
-        return Response(_j.dumps(status, ensure_ascii=False), mimetype='application/json')
-    poll_once(EXT)
-    poll_once(AGENT_EXT)
+        threading.Thread(target=_process_one, args=(only, EXT), daemon=True).start()
+    else:
+        _POLL_WANTED.set()
     return Response(json.dumps(status, ensure_ascii=False), mimetype='application/json')
+
+def _process_one(what, path):
+    try:
+        seen.add(what)
+        save_seen()
+        dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': what}, timeout=30)
+        text, audio = brain_voice(dl.content, what.split('/')[-1], agent=(path == AGENT_EXT))
+        status['processed'].append(what)
+        if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:') or text.startswith('AGENT:')):
+            if text.startswith('AGENT:'):
+                handle_agent_async(text[6:].strip())
+                status['note'] = 'browser-agent task started in background'
+            elif text.startswith('MEDIAQ:'):
+                handle_mediaq_async(text[7:].strip())
+                status['note'] = 'media download started in background'
+            else:
+                handle_media(text[6:].strip())
+        elif audio:
+            upload_reply_audio(audio, path)
+        elif text:
+            yemot_upload_tts(text[:1000], f"ivr2:/{path}/Reply-{int(time.time())}.tts")
+    except Exception as e:
+        status['last_error'] = str(e)[:300]
 
 @app.route('/hook')
 def hook():
@@ -289,6 +276,8 @@ def loop():
     while True:
         got = False
         try:
+            _POLL_WANTED.wait(timeout=30)
+            _POLL_WANTED.clear()
             got = _POLL_LOCK.acquire(blocking=False)
             if got:
                 poll_once(EXT)          # ext 2 = chat bot
@@ -301,7 +290,6 @@ def loop():
                     _POLL_LOCK.release()
                 except Exception:
                     pass
-        time.sleep(30)
 
 def _start_loop():
     threading.Thread(target=loop, daemon=True).start()
