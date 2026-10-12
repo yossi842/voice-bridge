@@ -5,7 +5,8 @@ app = Flask(__name__)
 
 YEMOT_TOKEN = os.environ.get('YEMOT_TOKEN', '')
 BRAIN_URL = os.environ.get('BRAIN_URL', 'https://voice-brain-o2ym.onrender.com')
-EXT = os.environ.get('YEMOT_EXT', '1')
+EXT = os.environ.get('YEMOT_EXT', '2')
+AGENT_EXT = os.environ.get('AGENT_EXT', '5')
 YBASE = 'https://www.call2all.co.il/ym/api'
 import json as _json
 SEEN_PATH = os.environ.get('SEEN_PATH', '/tmp/voice_seen.json')
@@ -34,8 +35,9 @@ def _file_ts(ds):
     except Exception:
         return 0
 
-def brain_voice(wav_bytes, fname='rec.wav'):
-    r = requests.post(f'{BRAIN_URL}/voice', files={'audio': (fname, wav_bytes, 'audio/wav')}, timeout=120)
+def brain_voice(wav_bytes, fname='rec.wav', agent=False):
+    ep = '/voice-agent' if agent else '/voice'
+    r = requests.post(f'{BRAIN_URL}{ep}', files={'audio': (fname, wav_bytes, 'audio/wav')}, timeout=120)
     if r.headers.get('Content-Type', '').startswith('audio'):
         return None, r.content
     try:
@@ -44,9 +46,10 @@ def brain_voice(wav_bytes, fname='rec.wav'):
     except Exception:
         return 'שגיאה בעיבוד', None
 
-def next_num_name():
+def next_num_name(path=None):
+    path = path or EXT
     try:
-        r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': EXT}, timeout=30).json()
+        r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': path}, timeout=30).json()
         status['dir_status'] = str(r.get('responseStatus', ''))[:50]
         status['files_count'] = len(r.get('files', []))
         status['ext'] = EXT
@@ -59,12 +62,14 @@ def next_num_name():
     except Exception:
         return f'Reply-{int(time.time())}.wav'
 
-def upload_reply_audio(audio):
-    name = next_num_name()
+def upload_reply_audio(audio, path=None):
+    path = path or EXT
+    name = next_num_name(path)
     requests.post(f'{YBASE}/UploadFile',
-        params={'token': YEMOT_TOKEN, 'path': f'ivr2:/{EXT}/{name}', 'convertAudio': 1},
-        files={'file': ('ans.mp3', audio, 'audio/mpeg')}, timeout=60)
-    seen.add(f'ivr2:/{EXT}/{name}')
+        params={'token': YEMOT_TOKEN, 'path': f'ivr2:/{path}/{name}', 'convertAudio': 1},
+        files={'file': ('ans.mp3', audio, 'audio/mpeg')}, timeout=120)
+    seen.add(f'ivr2:/{path}/{name}')
+    save_seen()
     return name
 
 def yemot_upload_tts(text, dest):
@@ -208,11 +213,12 @@ def hook():
     except Exception as e:
         return Response(f'read=t-שגיאה: {str(e)[:100]}', mimetype='text/plain')
 
-def poll_once():
+def poll_once(path=None):
     global first_run
+    path = path or EXT
     status['last_poll'] = time.strftime('%H:%M:%S')
     try:
-        r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': EXT}, timeout=30).json()
+        r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': path}, timeout=30).json()
         status['dir_status'] = str(r.get('responseStatus', ''))[:50]
         status['files_count'] = len(r.get('files', []))
         status['ext'] = EXT
@@ -236,7 +242,7 @@ def poll_once():
             # do NOT mark seen before success - only after we actually answer
             try:
                 dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': what}, timeout=30)
-                text, audio = brain_voice(dl.content, what.split('/')[-1])
+                text, audio = brain_voice(dl.content, what.split('/')[-1], agent=(path == AGENT_EXT))
             except Exception:
                 continue
             seen.add(what)
@@ -254,14 +260,15 @@ def poll_once():
             elif audio:
                 upload_reply_audio(audio)
             elif text:
-                dest = f"ivr2:/{EXT}/Reply-{int(time.time())}.tts"
+                dest = f"ivr2:/{path}/Reply-{int(time.time())}.tts"
                 yemot_upload_tts(text[:1000], dest)
     except Exception as e:
         status['last_error'] = str(e)[:300]
 
 def loop():
     while True:
-        poll_once()
+        poll_once(EXT)          # ext 2 = chat bot
+        poll_once(AGENT_EXT)    # ext 5 = full browser agent
         time.sleep(30)
 
 threading.Thread(target=loop, daemon=True).start()
