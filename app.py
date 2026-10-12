@@ -1,5 +1,6 @@
 from flask import Flask, request, Response
 import os, requests, threading, time, io
+import json
 
 app = Flask(__name__)
 
@@ -155,12 +156,27 @@ def debug():
     import json as _j
     return Response(_j.dumps(status, ensure_ascii=False), mimetype='application/json')
 
+_POLL_LOCK = threading.Lock()
+
 @app.route('/poll-now')
 def poll_now():
+    # serialise: the cron keepalive, the manual trigger and the 30s loop
+    # must never process the same recording at the same time (duplicate answers).
+    if not _POLL_LOCK.acquire(blocking=False):
+        return Response(json.dumps(status, ensure_ascii=False), mimetype='application/json')
+    try:
+        return _poll_now_inner()
+    finally:
+        _POLL_LOCK.release()
+
+def _poll_now_inner():
     only = request.args.get('file', '')
     if only:
         try:
-            seen.discard(only)
+            # force-reprocess a specific recording exactly once: mark it seen
+            # BEFORE work so a concurrent poll can't answer it a second time.
+            seen.add(only)
+            save_seen()
             dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': only}, timeout=30)
             text, audio = brain_voice(dl.content, only.split('/')[-1])
             status['processed'].append(only)
@@ -182,9 +198,9 @@ def poll_now():
             status['last_error'] = str(e)[:300]
         import json as _j
         return Response(_j.dumps(status, ensure_ascii=False), mimetype='application/json')
-    poll_once()
-    import json as _j
-    return Response(_j.dumps(status, ensure_ascii=False), mimetype='application/json')
+    poll_once(EXT)
+    poll_once(AGENT_EXT)
+    return Response(json.dumps(status, ensure_ascii=False), mimetype='application/json')
 
 @app.route('/hook')
 def hook():
@@ -267,8 +283,12 @@ def poll_once(path=None):
 
 def loop():
     while True:
-        poll_once(EXT)          # ext 2 = chat bot
-        poll_once(AGENT_EXT)    # ext 5 = full browser agent
+        if _POLL_LOCK.acquire(blocking=False):
+            try:
+                poll_once(EXT)          # ext 2 = chat bot
+                poll_once(AGENT_EXT)    # ext 5 = full browser agent
+            finally:
+                _POLL_LOCK.release()
         time.sleep(30)
 
 threading.Thread(target=loop, daemon=True).start()
