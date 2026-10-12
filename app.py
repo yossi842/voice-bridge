@@ -88,10 +88,12 @@ def handle_agent(task):
         r = requests.post(f'{ORACLE_MEDIA}/agent-task', params={'key': MEDIA_KEY},
                           json={'task': task}, timeout=60).json()
         tid = r.get('id', '')
+        status['agent_task'] = tid + ': polling'
         for _ in range(36):
             _t.sleep(20)
             s = requests.get(f'{ORACLE_MEDIA}/agent-result', params={'key': MEDIA_KEY, 'id': tid}, timeout=60).json()
             if s.get('status') == 'done':
+                status['agent_task'] = tid + ': done'
                 if s.get('files'):
                     f = requests.get(f'{ORACLE_MEDIA}/agent-file', params={'key': MEDIA_KEY, 'p': s['files'][0]}, timeout=300)
                     if len(f.content) > 10000:
@@ -109,13 +111,16 @@ def handle_agent(task):
                         pass
                 return None
             if s.get('status') == 'error':
+                status['agent_task'] = tid + ': error'
                 return None
-    except Exception:
+    except Exception as e:
+        status['agent_task'] = 'failed: ' + str(e)[:150]
         pass
     return None
 
 def handle_agent_async(task):
     threading.Thread(target=handle_agent, args=(task,), daemon=True).start()
+    status['agent_task'] = 'started: ' + task[:80]
 
 def handle_mediaq_async(query):
     threading.Thread(target=handle_mediaq, args=(query,), daemon=True).start()
