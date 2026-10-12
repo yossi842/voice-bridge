@@ -160,14 +160,18 @@ _POLL_LOCK = threading.Lock()
 
 @app.route('/poll-now')
 def poll_now():
-    # serialise: the cron keepalive, the manual trigger and the 30s loop
-    # must never process the same recording at the same time (duplicate answers).
+    # serialise: cron keepalive, manual trigger and the 30s loop must never
+    # process the same recording twice. acquired with a timeout so a stuck
+    # poll can never freeze the loop permanently.
     if not _POLL_LOCK.acquire(blocking=False):
         return Response(json.dumps(status, ensure_ascii=False), mimetype='application/json')
     try:
         return _poll_now_inner()
     finally:
-        _POLL_LOCK.release()
+        try:
+            _POLL_LOCK.release()
+        except Exception:
+            pass
 
 def _poll_now_inner():
     only = request.args.get('file', '')
@@ -283,15 +287,26 @@ def poll_once(path=None):
 
 def loop():
     while True:
-        if _POLL_LOCK.acquire(blocking=False):
-            try:
+        got = False
+        try:
+            got = _POLL_LOCK.acquire(blocking=False)
+            if got:
                 poll_once(EXT)          # ext 2 = chat bot
                 poll_once(AGENT_EXT)    # ext 5 = full browser agent
-            finally:
-                _POLL_LOCK.release()
+        except Exception as e:
+            status['last_error'] = 'loop: ' + str(e)[:200]
+        finally:
+            if got:
+                try:
+                    _POLL_LOCK.release()
+                except Exception:
+                    pass
         time.sleep(30)
 
-threading.Thread(target=loop, daemon=True).start()
+def _start_loop():
+    threading.Thread(target=loop, daemon=True).start()
+
+_start_loop()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
