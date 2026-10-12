@@ -7,7 +7,20 @@ YEMOT_TOKEN = os.environ.get('YEMOT_TOKEN', '')
 BRAIN_URL = os.environ.get('BRAIN_URL', 'https://voice-brain-o2ym.onrender.com')
 EXT = os.environ.get('YEMOT_EXT', '1')
 YBASE = 'https://www.call2all.co.il/ym/api'
-seen = set()
+import json as _json
+SEEN_PATH = os.environ.get('SEEN_PATH', '/tmp/voice_seen.json')
+try:
+    seen = set(_json.load(open(SEEN_PATH)))
+except Exception:
+    seen = set()
+
+def save_seen():
+    try:
+        keep = sorted(seen)[-400:]
+        _json.dump(keep, open(SEEN_PATH, 'w'))
+    except Exception:
+        pass
+
 first_run = True
 import time as _t
 START_TS = _t.time()
@@ -208,6 +221,7 @@ def poll_once():
                 what = f.get('what') or ''
                 if what.endswith('.wav') and _file_ts(f.get('date') or '') < START_TS - 600:
                     seen.add(what)
+            save_seen()
             first_run = False
             status['note'] = 'baseline marked (old only)'
             return
@@ -217,12 +231,16 @@ def poll_once():
                 continue
             if f.get('source') != 'Record':
                 seen.add(what)
+                save_seen()
+                continue
+            # do NOT mark seen before success - only after we actually answer
+            try:
+                dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': what}, timeout=30)
+                text, audio = brain_voice(dl.content, what.split('/')[-1])
+            except Exception:
                 continue
             seen.add(what)
-            if len(seen) > 200:
-                seen.clear()
-            dl = requests.get(f'{YBASE}/DownloadFile', params={'token': YEMOT_TOKEN, 'path': what}, timeout=30)
-            text, audio = brain_voice(dl.content, what.split('/')[-1])
+            save_seen()
             status['processed'].append(what)
             if text and (text.startswith('MEDIA:') or text.startswith('MEDIAQ:') or text.startswith('AGENT:')):
                 if text.startswith('AGENT:'):
