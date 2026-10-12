@@ -159,16 +159,60 @@ def debug():
 _POLL_LOCK = threading.Lock()
 _POLL_WANTED = threading.Event()
 
+def _do_poll_bounded(limit=1, only=''):
+    """Process at most `limit` recordings so the request always finishes well
+    inside gunicorn's --timeout (a killed worker also kills the poll thread)."""
+    done = 0
+    for path in (EXT, AGENT_EXT):
+        try:
+            r = requests.get(f'{YBASE}/GetIVR2Dir', params={'token': YEMOT_TOKEN, 'path': path}, timeout=25).json()
+        except Exception as e:
+            status['last_error'] = str(e)[:200]
+            continue
+        status['dir_status'] = str(r.get('responseStatus', ''))[:50]
+        status['files_count'] = len(r.get('files', []))
+        status['ext'] = path
+        global first_run
+        if first_run:
+            for f in r.get('files', []):
+                w = f.get('what') or ''
+                if w.endswith('.wav') and _file_ts(f.get('date') or '') < START_TS - 600:
+                    seen.add(w)
+            save_seen()
+            first_run = False
+            return done
+        for f in r.get('files', []):
+            if done >= limit:
+                return done
+            what = f.get('what', '')
+            if what in seen or not what.endswith('.wav') or f.get('source') != 'Record':
+                seen.add(what)
+                save_seen()
+                continue
+            _process_one(what, path)
+            done += 1
+    return done
+
 @app.route('/poll-now')
 def poll_now():
-    # MUST return immediately. Heavy work (STT+LLM+TTS) can exceed gunicorn's
-    # --timeout, which kills the worker and takes the polling thread with it.
-    only = request.args.get('file', '')
-    if only:
-        threading.Thread(target=_process_one, args=(only, EXT), daemon=True).start()
-    else:
-        _POLL_WANTED.set()
-    return Response(json.dumps(status, ensure_ascii=False), mimetype='application/json')
+    if not _POLL_LOCK.acquire(blocking=False):
+        return Response(json.dumps(status, ensure_ascii=False), mimetype='application/json')
+    try:
+        status['last_poll'] = time.strftime('%H:%M:%S')
+        only = request.args.get('file', '')
+        if only:
+            _process_one(only, EXT)
+        else:
+            _do_poll_bounded(limit=1)
+        return Response(json.dumps(status, ensure_ascii=False), mimetype='application/json')
+    except Exception as e:
+        status['last_error'] = str(e)[:300]
+        return Response(json.dumps(status, ensure_ascii=False), mimetype='application/json')
+    finally:
+        try:
+            _POLL_LOCK.release()
+        except Exception:
+            pass
 
 def _process_one(what, path):
     try:
@@ -273,23 +317,17 @@ def poll_once(path=None):
         status['last_error'] = str(e)[:300]
 
 def loop():
+    # Safety net only. The cron keepalive drives the real polling via /poll-now.
     while True:
-        got = False
         try:
-            _POLL_WANTED.wait(timeout=30)
-            _POLL_WANTED.clear()
-            got = _POLL_LOCK.acquire(blocking=False)
-            if got:
-                poll_once(EXT)          # ext 2 = chat bot
-                poll_once(AGENT_EXT)    # ext 5 = full browser agent
+            time.sleep(60)
+            if _POLL_LOCK.acquire(blocking=False):
+                try:
+                    _do_poll_bounded(limit=1)
+                finally:
+                    _POLL_LOCK.release()
         except Exception as e:
             status['last_error'] = 'loop: ' + str(e)[:200]
-        finally:
-            if got:
-                try:
-                    _POLL_LOCK.release()
-                except Exception:
-                    pass
 
 def _start_loop():
     threading.Thread(target=loop, daemon=True).start()
